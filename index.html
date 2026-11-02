@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cyber Threat Feed</title>
+<meta name="description" content="One place to see what is happening in cyber security: attacks, exploited vulnerabilities, advisories and news, linked to the original sources.">
+<meta name="referrer" content="no-referrer">
 <style>
   :root {
     --bg: #f6f7f9; --card: #fff; --text: #1b1f24; --muted: #5f6b7a; --border: #dde2e8;
@@ -42,6 +44,9 @@
   .MEDIUM, .MODERATE { color: var(--yellow); } .LOW { color: var(--green); }
   .cat { color: var(--accent); }
   .empty { text-align: center; color: var(--muted); padding: 40px; }
+  .tagline { color: var(--muted); font-size: 12px; margin: 2px 0 0; }
+  footer { color: var(--muted); font-size: 12px; text-align: center; padding: 0 16px 32px; }
+  footer a, .top a { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -50,7 +55,9 @@
     <h1>Cyber Threat Feed</h1>
     <span id="status">Loading…</span>
     <button id="refresh">Refresh</button>
+    <a href="about.html">About &amp; privacy</a>
   </div>
+  <p class="tagline">Attacks, exploited vulnerabilities, advisories and news from 50+ sources. Every headline opens the original article on the publisher's site.</p>
   <div class="controls">
     <span id="tabs"></span>
     <input id="search" type="search" placeholder="Search title, CVE, vendor, package…">
@@ -68,11 +75,19 @@
   <div class="stats" id="stats"></div>
   <div id="list"></div>
 </main>
+<footer>Headlines and short excerpts belong to their publishers; this site hosts no articles and uses no cookies or tracking. <a href="about.html">About &amp; privacy</a></footer>
 <script>
-const TABS = [["", "All"], ["news", "News"], ["threat intel", "Threat intel"], ["government", "Gov / CERTs"],
-              ["vendor", "Vendor advisories"], ["vulnerability", "CVE databases"], ["cloud", "Cloud (Azure/AWS/GCP)"],
-              ["healthcare", "Healthcare"], ["us", "US"], ["ransomware", "Ransomware"],
-              ["leadership", "Leadership & regulation"], ["exploited", "Actively exploited"]];
+const TABS = [["", "All"], ["exploited", "Actively exploited"], ["attacks", "Attacks & breaches"], ["ransomware", "Ransomware"],
+              ["news", "News"], ["threat intel", "Threat intel"], ["government", "Gov / CERTs"],
+              ["vendor", "Vendor advisories"], ["vulnerability", "CVE databases"], ["sysadmin", "Sysadmins & patching"],
+              ["developers", "Developers"], ["cloud", "Cloud (Azure/AWS/GCP)"], ["healthcare", "Healthcare"], ["us", "US"],
+              ["leadership", "Leadership & regulation"]];
+const ATTACK_RE = /\b(breach\w*|hacked|hackers?|cyberattacks?|attacks?|compromised?|stolen|stole|leak\w*|extortion|exploited|zero-day)\b/i;
+const isAttack = i => i.category === "ransomware" || ATTACK_RE.test(`${i.title} ${i.summary}`);
+const DEV_RE = /\b(npm|pypi|crates|maven|nuget|rubygems|github|gitlab|supply[- ]chain|open[- ]source|packages?|dependenc\w*|libraries|library|sdk|ci\/cd|docker|vs ?code|wordpress plugin|api keys?)\b/i;
+const isDev = i => i.source === "GitHub Advisories" || !!i.packages || DEV_RE.test(`${i.title} ${i.summary}`);
+const SYSADMIN_RE = /\b(patch\w*|security updates?|update now|windows|linux|kernel|vmware|esxi|exchange server|active directory|firewalls?|vpn|citrix|fortinet|fortios|ivanti|ubuntu|debian|red hat|openssh|routers?)\b/i;
+const isSysadmin = i => i.category === "vendor" || SYSADMIN_RE.test(`${i.title} ${i.summary}`);
 const isRansom = i => i.category === "ransomware" || /\bransomware\b/i.test(`${i.title} ${i.summary}`);
 const LEAD_RE = /\b(sec|regulat\w*|compliance|nist|hipaa|nis2|dora|gdpr|ccpa|cisos?|board|fined?|fines|settlements?|lawsuits?|legislation|executive order|disclosure|cyber insurance)\b/i;
 const isLead = i => i.category === "leadership" || LEAD_RE.test(`${i.title} ${i.summary}`);
@@ -98,14 +113,15 @@ function ago(iso) {
   return `${Math.round(m / 1440)}d ago`;
 }
 const isHot = i => i.severity === "EXPLOITED" || i.cves.some(c => exploited.has(c));
+const FILTERS = { exploited: isHot, attacks: isAttack, cloud: isCloud, healthcare: isHealth, us: isUS, ransomware: isRansom,
+                  leadership: isLead, developers: isDev, sysadmin: isSysadmin };
 
 function render() {
   const q = $("search").value.trim().toLowerCase(), src = $("source").value, days = $("age").value;
   const cutoff = days ? Date.now() - days * 864e5 : 0;
   const inAge = data.items.filter(i => !cutoff || (i.date && new Date(i.date) >= cutoff));
   const shown = inAge.filter(i =>
-    (!tab || (tab === "exploited" ? isHot(i) : tab === "cloud" ? isCloud(i) : tab === "healthcare" ? isHealth(i) : tab === "us" ? isUS(i) :
-             tab === "ransomware" ? isRansom(i) : tab === "leadership" ? isLead(i) : i.category === tab)) &&
+    (!tab || (FILTERS[tab] ? FILTERS[tab](i) : i.category === tab)) &&
     (!src || i.source === src) &&
     (!q || [i.title, i.summary, i.source, i.packages, i.cves.join(" ")].join(" ").toLowerCase().includes(q)));
 
@@ -137,11 +153,11 @@ function card(i) {
   return d;
 }
 
-async function load(force) {
-  $("status").textContent = "Fetching feeds…";
+async function load() {
+  $("status").textContent = "Loading…";
   $("refresh").disabled = true;
   try {
-    const r = await fetch("feed.json" + (force ? "?refresh=1" : ""));
+    const r = await fetch("feed.json", { cache: "no-cache" });
     data = await r.json();
     exploited = new Set(data.exploited);
     const cur = $("source").value;
@@ -149,10 +165,10 @@ async function load(force) {
     $("source").options[0].value = "";
     $("source").value = cur;
     $("errors").replaceChildren(...(data.errors.length ? [el("div", "errors", "Some sources failed: " + data.errors.join(" | "))] : []));
-    $("status").textContent = `Updated ${new Date(data.updated).toLocaleTimeString()} · ${data.items.length} items`;
+    $("status").textContent = `Updated ${ago(data.updated)} · ${data.items.length} items`;
     render();
   } catch (e) {
-    $("status").textContent = "Failed to load. Is server.py running?";
+    $("status").textContent = "Couldn't load the feed. Try again in a few minutes.";
   }
   $("refresh").disabled = false;
 }
@@ -163,9 +179,9 @@ $("tabs").append(...TABS.map(([k, label]) => {
   return b;
 }));
 ["search", "source", "age"].forEach(id => $(id).addEventListener("input", render));
-$("refresh").onclick = () => load(true);
-load(false);
-setInterval(() => load(false), 15 * 60 * 1000);
+$("refresh").onclick = () => load();
+load();
+setInterval(load, 15 * 60 * 1000);
 </script>
 </body>
 </html>

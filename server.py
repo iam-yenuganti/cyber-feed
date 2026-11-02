@@ -143,6 +143,9 @@ def parse_feed(name, category, url, cyber_only=False):
         if not link:  # Atom: <link href="..."/>
             link = next((c.get("href", "") for c in el
                          if local(c.tag) == "link" and c.get("rel", "alternate") == "alternate"), "")
+        guid = child_text(el, "guid").strip()
+        if not link and guid.startswith("http"):  # some feeds (e.g. FBI) only put the URL in <guid>
+            link = guid
         items.append(item(
             name, category, clean(child_text(el, "title"), 200), link.strip(),
             parse_date(child_text(el, "pubDate", "published", "updated", "date")),

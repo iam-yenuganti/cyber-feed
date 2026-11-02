@@ -27,7 +27,7 @@ jobs:
       - name: Fetch feeds
         run: |
           mkdir _site
-          cp index.html _site/
+          cp index.html about.html _site/
           python3 -c "import json, server; print(json.dumps(server.collect()))" > _site/feed.json
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
