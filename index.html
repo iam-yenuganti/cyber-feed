@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cyber Threat Feed</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1b1f24; --muted: #5f6b7a; --border: #dde2e8;
+    --accent: #2457d6; --red: #c62828; --orange: #d9640a; --yellow: #a07800; --green: #2e7d32;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1216; --card: #171b21; --text: #e6e9ee; --muted: #94a0b0; --border: #2a313b;
+      --accent: #6d9bff; --red: #ff6b6b; --orange: #ff9d4d; --yellow: #e6c14a; --green: #6fcf73; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { position: sticky; top: 0; z-index: 1; background: var(--bg); border-bottom: 1px solid var(--border); padding: 12px 16px; }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  .top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; flex: 1; }
+  #status { color: var(--muted); font-size: 12px; }
+  button, input, select { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
+  button { cursor: pointer; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .controls input { flex: 1; min-width: 180px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 14px 0; }
+  .stat { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .stat b { display: block; font-size: 22px; }
+  .stat span { color: var(--muted); font-size: 12px; }
+  main { padding: 0 16px 40px; }
+  .errors { background: var(--card); border: 1px solid var(--orange); border-radius: 8px; padding: 8px 12px; margin-top: 14px; font-size: 12px; color: var(--orange); }
+  .item { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; }
+  .item.hot { border-left: 4px solid var(--red); }
+  .meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .item a { color: var(--text); font-weight: 600; text-decoration: none; }
+  .item a:hover { color: var(--accent); text-decoration: underline; }
+  .item p { margin: 4px 0 0; color: var(--muted); }
+  .badge { border: 1px solid currentColor; border-radius: 10px; padding: 0 7px; font-size: 11px; font-weight: 600; }
+  .CRITICAL, .EXPLOITED { color: var(--red); } .HIGH { color: var(--orange); }
+  .MEDIUM, .MODERATE { color: var(--yellow); } .LOW { color: var(--green); }
+  .cat { color: var(--accent); }
+  .empty { text-align: center; color: var(--muted); padding: 40px; }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="top">
+    <h1>Cyber Threat Feed</h1>
+    <span id="status">Loading…</span>
+    <button id="refresh">Refresh</button>
+  </div>
+  <div class="controls">
+    <span id="tabs"></span>
+    <input id="search" type="search" placeholder="Search title, CVE, vendor, package…">
+    <select id="source"><option value="">All sources</option></select>
+    <select id="age">
+      <option value="1">Last 24 hours</option>
+      <option value="7" selected>Last 7 days</option>
+      <option value="30">Last 30 days</option>
+      <option value="">Any time</option>
+    </select>
+  </div>
+</div></header>
+<main class="wrap">
+  <div id="errors"></div>
+  <div class="stats" id="stats"></div>
+  <div id="list"></div>
+</main>
+<script>
+const TABS = [["", "All"], ["news", "News"], ["threat intel", "Threat intel"], ["government", "Gov / CERTs"],
+              ["vendor", "Vendor advisories"], ["vulnerability", "CVE databases"], ["cloud", "Cloud (Azure/AWS/GCP)"],
+              ["healthcare", "Healthcare"], ["us", "US"], ["ransomware", "Ransomware"],
+              ["leadership", "Leadership & regulation"], ["exploited", "Actively exploited"]];
+const isRansom = i => i.category === "ransomware" || /\bransomware\b/i.test(`${i.title} ${i.summary}`);
+const LEAD_RE = /\b(sec|regulat\w*|compliance|nist|hipaa|nis2|dora|gdpr|ccpa|cisos?|board|fined?|fines|settlements?|lawsuits?|legislation|executive order|disclosure|cyber insurance)\b/i;
+const isLead = i => i.category === "leadership" || LEAD_RE.test(`${i.title} ${i.summary}`);
+const isUS = i => /\(US\)|^CISA KEV|^NVD/.test(i.source);
+const CLOUD_RE = /\b(azure|entra|microsoft 365|office 365|aws|amazon|ec2|s3|lambda|gcp|google cloud|gke|eks|aks|kubernetes)\b/i;
+const isCloud = i => CLOUD_RE.test(`${i.source} ${i.title} ${i.summary} ${i.packages}`);
+const HEALTH_RE = /\b(healthcare|health care|health system|hospitals?|medical|patients?|hipaa|pharma\w*|clinics?|nhs|ehr|icsma|health-isac)\b/i;
+const isHealth = i => i.category === "healthcare" || HEALTH_RE.test(`${i.title} ${i.summary}`);
+let data = { items: [], exploited: [] }, exploited = new Set(), tab = "";
+const $ = id => document.getElementById(id);
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+function ago(iso) {
+  if (!iso) return "date unknown";
+  const m = (Date.now() - new Date(iso)) / 60000;
+  if (m < 60) return `${Math.max(1, Math.round(m))}m ago`;
+  if (m < 1440) return `${Math.round(m / 60)}h ago`;
+  return `${Math.round(m / 1440)}d ago`;
+}
+const isHot = i => i.severity === "EXPLOITED" || i.cves.some(c => exploited.has(c));
+
+function render() {
+  const q = $("search").value.trim().toLowerCase(), src = $("source").value, days = $("age").value;
+  const cutoff = days ? Date.now() - days * 864e5 : 0;
+  const inAge = data.items.filter(i => !cutoff || (i.date && new Date(i.date) >= cutoff));
+  const shown = inAge.filter(i =>
+    (!tab || (tab === "exploited" ? isHot(i) : tab === "cloud" ? isCloud(i) : tab === "healthcare" ? isHealth(i) : tab === "us" ? isUS(i) :
+             tab === "ransomware" ? isRansom(i) : tab === "leadership" ? isLead(i) : i.category === tab)) &&
+    (!src || i.source === src) &&
+    (!q || [i.title, i.summary, i.source, i.packages, i.cves.join(" ")].join(" ").toLowerCase().includes(q)));
+
+  const count = f => inAge.filter(f).length;
+  $("stats").replaceChildren(...[
+    [count(i => i.source === "CISA KEV"), "newly exploited vulns (CISA KEV)"],
+    [count(i => i.severity === "CRITICAL"), "critical CVEs"],
+    [count(i => i.category === "ransomware"), "ransomware victims claimed"],
+    [count(i => i.category === "ransomware" && /healthcare/i.test(i.summary)), "healthcare ransomware victims"],
+    [count(i => i.category === "government"), "gov / CERT advisories"],
+    [count(i => i.category === "vendor"), "vendor advisories"],
+  ].map(([n, label]) => { const s = el("div", "stat"); s.append(el("b", "", n), el("span", "", label)); return s; }));
+
+  $("list").replaceChildren(...(shown.length ? shown.slice(0, 500).map(card) : [el("div", "empty", "Nothing matches these filters.")]));
+}
+
+function card(i) {
+  const hot = isHot(i), d = el("div", "item" + (hot ? " hot" : ""));
+  const meta = el("div", "meta");
+  meta.append(el("span", "badge cat", i.category));
+  if (i.severity && i.severity !== "EXPLOITED") meta.append(el("span", "badge " + i.severity, i.severity));
+  if (hot) meta.append(el("span", "badge EXPLOITED", "ACTIVELY EXPLOITED"));
+  meta.append(el("span", "", `${i.source} · ${ago(i.date)}`));
+  const a = el("a", "", i.title || "(untitled)");
+  if (/^https?:\/\//i.test(i.link)) { a.href = i.link; a.target = "_blank"; a.rel = "noopener noreferrer"; }
+  d.append(meta, a);
+  if (i.packages) d.append(el("p", "", "Affects: " + i.packages));
+  if (i.summary) d.append(el("p", "", i.summary));
+  return d;
+}
+
+async function load(force) {
+  $("status").textContent = "Fetching feeds…";
+  $("refresh").disabled = true;
+  try {
+    const r = await fetch("feed.json" + (force ? "?refresh=1" : ""));
+    data = await r.json();
+    exploited = new Set(data.exploited);
+    const cur = $("source").value;
+    $("source").replaceChildren(el("option", "", "All sources"), ...[...new Set(data.items.map(i => i.source))].sort().map(s => el("option", "", s)));
+    $("source").options[0].value = "";
+    $("source").value = cur;
+    $("errors").replaceChildren(...(data.errors.length ? [el("div", "errors", "Some sources failed: " + data.errors.join(" | "))] : []));
+    $("status").textContent = `Updated ${new Date(data.updated).toLocaleTimeString()} · ${data.items.length} items`;
+    render();
+  } catch (e) {
+    $("status").textContent = "Failed to load. Is server.py running?";
+  }
+  $("refresh").disabled = false;
+}
+
+$("tabs").append(...TABS.map(([k, label]) => {
+  const b = el("button", k === tab ? "on" : "", label);
+  b.onclick = () => { tab = k; [...$("tabs").children].forEach(x => x.classList.toggle("on", x === b)); render(); };
+  return b;
+}));
+["search", "source", "age"].forEach(id => $(id).addEventListener("input", render));
+$("refresh").onclick = () => load(true);
+load(false);
+setInterval(() => load(false), 15 * 60 * 1000);
+</script>
+</body>
+</html>
